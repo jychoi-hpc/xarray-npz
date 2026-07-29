@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xarray-npz"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "xarray>=2023.1.0",
+]
+
+[project.entry-points."xarray.backends"]
+npz = "xarray_npz.backend:NPZBackendEntrypoint"
