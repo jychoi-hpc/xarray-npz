@@ -43,6 +43,7 @@ class _NpzArrayWrapper(BackendArray):
         with np.load(self.path, allow_pickle=False) as archive:
             return archive[self.name][key]
 
+
 # Approach from https://stackoverflow.com/a/35990775 — read only .npy headers
 # from the ZIP index without decompressing array data.
 def _npz_headers(
@@ -139,7 +140,7 @@ class NPZBackendEntrypoint(BackendEntrypoint):
                 continue
 
             is_coord = key.startswith(_COORD_PREFIX)
-            logical_name = key[len(_COORD_PREFIX):] if is_coord else key
+            logical_name = key[len(_COORD_PREFIX) :] if is_coord else key
 
             if logical_name in dropped:
                 continue
