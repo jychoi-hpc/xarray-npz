@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from collections.abc import Iterable
 from os import PathLike
 from pathlib import Path
@@ -41,6 +42,28 @@ class _NpzArrayWrapper(BackendArray):
     def _getitem(self, key: Any) -> np.ndarray:
         with np.load(self.path, allow_pickle=False) as archive:
             return archive[self.name][key]
+
+## Credit: https://stackoverflow.com/questions/35990775/finding-shape-of-saved-numpy-array-npy-or-npz-without-loading-into-memory
+def _npz_headers(
+    path: Path,
+) -> Iterable[tuple[str, tuple[int, ...], np.dtype]]:
+    """Yield (name, shape, dtype) for each .npy entry without loading array data."""
+    with zipfile.ZipFile(path) as zf:
+        for zip_name in zf.namelist():
+            if not zip_name.endswith(".npy"):
+                continue
+            with zf.open(zip_name) as f:
+                version = np.lib.format.read_magic(f)
+                try:
+                    # numpy 2.0+ public API
+                    if version == (1, 0):
+                        shape, _, dtype = np.lib.format.read_array_header_1_0(f)
+                    else:
+                        shape, _, dtype = np.lib.format.read_array_header_2_0(f)
+                except AttributeError:
+                    # numpy < 2.0 private API
+                    shape, _, dtype = np.lib.format._read_array_header(f, version)
+            yield zip_name[:-4], shape, dtype
 
 
 def _fallback_dims(name: str, ndim: int) -> tuple[str, ...]:
@@ -98,49 +121,51 @@ class NPZBackendEntrypoint(BackendEntrypoint):
         else:
             dropped = set(drop_variables)
 
-        data_vars: dict[str, xr.Variable] = {}
-        coords: dict[str, xr.Variable] = {}
-
+        # Read metadata content only (small uint8 array, negligible cost).
         with np.load(path, allow_pickle=False) as archive:
             meta: dict[str, Any] = {}
             if _METADATA_KEY in archive.files:
                 meta = json.loads(archive[_METADATA_KEY].tobytes().decode())
-            if metadata is not None:
-                meta = metadata
+        if metadata is not None:
+            meta = metadata
 
-            for key in archive.files:
-                if key == _METADATA_KEY:
-                    continue
+        data_vars: dict[str, xr.Variable] = {}
+        coords: dict[str, xr.Variable] = {}
 
-                is_coord = key.startswith(_COORD_PREFIX)
-                logical_name = key[len(_COORD_PREFIX):] if is_coord else key
+        # Read only .npy headers — no array data is decompressed.
+        for key, shape, dtype in _npz_headers(path):
+            if key == _METADATA_KEY:
+                continue
 
-                if logical_name in dropped:
-                    continue
+            is_coord = key.startswith(_COORD_PREFIX)
+            logical_name = key[len(_COORD_PREFIX):] if is_coord else key
 
-                arr = archive[key]
-                if key in meta.get("dims", {}):
-                    dims = tuple(meta["dims"][key])
-                elif hint is not None and arr.ndim > 0:
-                    dims = _infer_dims_from_hint(logical_name, arr.shape, hint)
-                else:
-                    dims = _fallback_dims(logical_name, arr.ndim)
-                attrs: dict[str, Any] = (
-                    meta.get("coord_attrs", {}).get(logical_name, {})
-                    if is_coord
-                    else meta.get("var_attrs", {}).get(logical_name, {})
-                )
-                wrapper = _NpzArrayWrapper(path, key, arr.dtype, arr.shape)
-                var = xr.Variable(
-                    dims,
-                    LazilyIndexedArray(wrapper),
-                    attrs=attrs,
-                    encoding={"source": str(path), "dtype": arr.dtype},
-                )
-                if is_coord:
-                    coords[logical_name] = var
-                else:
-                    data_vars[logical_name] = var
+            if logical_name in dropped:
+                continue
+
+            if key in meta.get("dims", {}):
+                dims = tuple(meta["dims"][key])
+            elif hint is not None and len(shape) > 0:
+                dims = _infer_dims_from_hint(logical_name, shape, hint)
+            else:
+                dims = _fallback_dims(logical_name, len(shape))
+
+            attrs: dict[str, Any] = (
+                meta.get("coord_attrs", {}).get(logical_name, {})
+                if is_coord
+                else meta.get("var_attrs", {}).get(logical_name, {})
+            )
+            wrapper = _NpzArrayWrapper(path, key, dtype, shape)
+            var = xr.Variable(
+                dims,
+                LazilyIndexedArray(wrapper),
+                attrs=attrs,
+                encoding={"source": str(path), "dtype": dtype},
+            )
+            if is_coord:
+                coords[logical_name] = var
+            else:
+                data_vars[logical_name] = var
 
         return xr.Dataset(
             data_vars=data_vars,
