@@ -24,11 +24,6 @@ Or install directly from the repository without cloning:
 pip install git+ssh://git@github.com/jychoi-hpc/xarray-npz.git
 ```
 
-**From PyPI (once published):**
-
-```bash
-pip install xarray-npz
-```
 
 Requires Python 3.10+, NumPy 1.24+, and xarray 2023.1+.
 
