@@ -43,7 +43,8 @@ class _NpzArrayWrapper(BackendArray):
         with np.load(self.path, allow_pickle=False) as archive:
             return archive[self.name][key]
 
-## Credit: https://stackoverflow.com/questions/35990775/finding-shape-of-saved-numpy-array-npy-or-npz-without-loading-into-memory
+# Approach from https://stackoverflow.com/a/35990775 — read only .npy headers
+# from the ZIP index without decompressing array data.
 def _npz_headers(
     path: Path,
 ) -> Iterable[tuple[str, tuple[int, ...], np.dtype]]:
